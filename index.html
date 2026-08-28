@@ -58,6 +58,13 @@
   .count{font-weight:800;margin-bottom:4px}
   .count b{color:var(--blue);font-family:var(--disp);font-size:20px}
   .zoomwrap{overflow-x:auto;border-radius:12px;margin-top:10px}
+  .calrow{display:flex;justify-content:flex-start;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .calread{font-size:13px;font-weight:800;color:var(--blue-dark);background:var(--blue-soft);border-radius:8px;padding:4px 10px}
+  .findings{background:#F4F8FB;border:2px solid #C9D8E4;border-radius:12px;padding:10px 14px;margin-bottom:10px}
+  .findings .ftitle{font-family:var(--disp);font-weight:700;font-size:14px;color:var(--blue-dark);margin-bottom:6px}
+  .frow{display:flex;justify-content:space-between;gap:12px;font-size:14px;padding:2px 0}
+  .frow span{color:var(--slate);font-weight:700}
+  .frow b{color:var(--navy);text-align:right}
   svg.strip{width:100%;display:block;border-radius:12px;background:var(--paper);touch-action:manipulation}
   .cb-draw{stroke-dasharray:1;stroke-dashoffset:1;animation:cbdraw 1.1s ease-out forwards}
   @keyframes cbdraw{to{stroke-dashoffset:0}}
@@ -167,7 +174,7 @@ var RHYTHMS = {
   tach:{name:"Sinus tachycardia", reg:"regular", p:"yes", pr:"normal", qrs:"narrow",
     teach:"Normal sinus features with a rate above 100. Usually a response to something: fever, pain, hypovolemia, anxiety. Treat the cause, not the rhythm."},
   avb1:{name:"1st-degree AV block", reg:"regular", p:"yes", pr:"long", qrs:"narrow",
-    teach:"Looks like sinus rhythm, but the PR interval is stretched past 0.20 s (more than 5 small boxes). Every impulse still gets through; it just takes longer. Usually benign, but monitor."},
+    teach:"Looks like sinus rhythm, but the PR interval is stretched past 0.20 seconds. Every impulse still gets through; it just takes longer. Usually benign, but monitor."},
   afib:{name:"Atrial fibrillation", reg:"irregular", p:"no", pr:"na", qrs:"narrow",
     teach:"The two giveaways: an irregularly irregular rhythm and no true P waves, just a wavy fibrillating baseline. The atria are quivering, so there is no PR interval to measure."},
   vtach:{name:"Ventricular tachycardia", reg:"regular", p:"no", pr:"na", qrs:"wide",
@@ -183,7 +190,8 @@ var STEP_LABEL = {rate:"1 · Rate", reg:"2 · Regular?", p:"3 · P waves", pr:"4
 var S = {
   screen:"intro", round:0, rhythmKey:null, strip:null, stepIdx:0,
   marks:[], rateLocked:false, feedback:null, showCal:false,
-  score:0, roundScore:0, roundMax:0, patients:0, missed:null
+  score:0, roundScore:0, roundMax:0, patients:0, missed:null,
+  cal:{on:false, a:1.2, b:2.0}, zcal:{a:null, b:null}, _zoomT0:0
 };
 
 function step(){ return STEPS[S.stepIdx]; }
@@ -195,6 +203,7 @@ function newRound(){
   S.rhythmKey = k; S.strip = generateStrip(k);
   S.stepIdx = 0; S.marks = []; S.rateLocked = false; S.feedback = null;
   S.showCal = false; S.missed = null; S.roundScore = 0; S.roundMax = 0;
+  S.cal.a = 1.2; S.cal.b = 2.0; S.zcal = {a:null, b:null};
   S.round++; S.screen = "play";
   render();
 }
@@ -243,8 +252,8 @@ function lockRate(claimZero){
 var LABELS = {
   reg:{regular:"Regular", irregular:"Irregular"},
   p:{yes:"Yes, one before every QRS", no:"No / can't find real P waves"},
-  pr:{normal:"Normal (3\u20135 small boxes)", long:"Prolonged (>5 small boxes)", na:"Can't measure it"},
-  qrs:{narrow:"Narrow (<3 small boxes)", wide:"Wide (3+ small boxes)"}
+  pr:{normal:"Normal (0.12\u20130.20 s)", long:"Prolonged (over 0.20 s)", na:"Can't measure it"},
+  qrs:{narrow:"Narrow (under 0.12 s)", wide:"Wide (0.12 s or more)"}
 };
 function answer(stepKey, choice){
   if (S.feedback) return;
@@ -257,11 +266,11 @@ function answer(stepKey, choice){
     p:{yes:"There is one rounded P wave sitting in front of every QRS, so the sinus node is in charge.",
        no:(S.rhythmKey==="afib" ? "No true P waves, just a chaotic wavy baseline. The atria are fibrillating."
                                 : "No P waves here: this rhythm starts in the ventricles, not the sinus node.")},
-    pr:{normal:"The PR measures 3 to 5 small boxes (0.12 to 0.20 s): normal conduction time.",
-        long:"The PR stretches past 5 small boxes (over 0.20 s): the impulse is delayed at the AV node.",
+    pr:{normal:"The PR measures between 0.12 and 0.20 seconds: normal conduction time.",
+        long:"The PR stretches past 0.20 seconds: the impulse is delayed at the AV node.",
         na:"With no P waves there is no PR interval to measure. Mark it as not measurable."},
-    qrs:{narrow:"The QRS is under 3 small boxes (under 0.12 s): the impulse used the normal fast pathways.",
-         wide:"The QRS is 3 small boxes or more (0.12 s or more), wide and bizarre: a ventricular origin."}
+    qrs:{narrow:"The QRS is under 0.12 seconds: the impulse used the normal fast pathways.",
+         wide:"The QRS is 0.12 seconds or more, wide and bizarre: a ventricular origin."}
   };
   var explain = texts[stepKey][correct];
   S.feedback = {ok:ok, text: ok ? explain : ("The answer is \u201C" + LABELS[stepKey][correct] + "\u201D. " + explain)};
@@ -274,9 +283,37 @@ function answerId(choice){
   S.feedback = {ok:ok, text:(ok ? "" : "This one is " + rhythm().name + ". ") + rhythm().teach};
   render();
 }
+function findingsData(){
+  var rh = rhythm(), s = S.strip;
+  if (S.rhythmKey === "asystole"){
+    return [["Rate","0 bpm (flatline)"],["Regularity","n/a"],["P waves","n/a"],["PR interval","n/a"],["QRS width","n/a"]];
+  }
+  return [
+    ["Rate","\u2248 " + (s.peaks.length*10) + " bpm"],
+    ["Regularity", rh.reg === "regular" ? "Regular" : "Irregularly irregular"],
+    ["P waves", rh.p === "yes" ? "Present before every QRS" : "Absent"],
+    ["PR interval", s.prSec != null ? s.prSec.toFixed(2) + " s (" + (rh.pr === "long" ? "prolonged" : "normal") + ")" : "Not measurable"],
+    ["QRS width", s.qrsSec.toFixed(2) + " s (" + (rh.qrs === "narrow" ? "narrow" : "wide") + ")"]
+  ];
+}
 
 /* ---------- SVG builders ---------- */
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function calText(a,b){
+  return Math.abs(b-a).toFixed(2)+" s";
+}
+function caliperGroup(prefix, ax, bx, h){
+  function leg(id,x){
+    return '<line id="'+prefix+'-l'+id+'" x1="'+x+'" y1="0" x2="'+x+'" y2="'+h+'" stroke="#215E9E" stroke-width="1.8" pointer-events="none"/>'
+      + '<circle id="'+prefix+'-h'+id+'" cx="'+x+'" cy="12" r="8" fill="#2F7FD1" stroke="#fff" stroke-width="2" data-leg="'+id+'" style="cursor:ew-resize"/>'
+      + '<circle id="'+prefix+'-g'+id+'" cx="'+x+'" cy="12" r="17" fill="transparent" data-leg="'+id+'"/>';
+  }
+  var lo = Math.min(ax,bx), w = Math.max(Math.abs(bx-ax),1);
+  return '<g id="'+prefix+'-cal">'
+    + '<line id="'+prefix+'-bar" x1="'+ax+'" y1="12" x2="'+bx+'" y2="12" stroke="#215E9E" stroke-width="2" pointer-events="none"/>'
+    + '<rect id="'+prefix+'-barhit" x="'+lo+'" y="3" width="'+w+'" height="18" fill="transparent" data-leg="bar" style="cursor:grab"/>'
+    + leg('a',ax) + leg('b',bx) + '</g>';
+}
 function gridSVG(w,h,sm){
   var out = "";
   for (var x=0;x<=w;x+=sm){
@@ -325,8 +362,12 @@ function stripSVG(){
       out += '<circle cx="'+(S.missed[z]*PX_PER_SEC)+'" cy="'+(BASE_Y - MV*1.12 - 8)+'" r="7" fill="none" stroke="#D95757" stroke-width="2.4" stroke-dasharray="3 2"/>';
     }
   }
+  if (S.cal.on) out += caliperGroup('sc', S.cal.a*PX_PER_SEC, S.cal.b*PX_PER_SEC, STRIP_H);
+  var sty = [];
+  if (step()==="rate" && !S.rateLocked) sty.push("cursor:crosshair");
+  if (S.cal.on) sty.push("touch-action:none");
   return '<svg id="strip-svg" class="strip" viewBox="0 0 '+STRIP_W+' '+STRIP_H+'" role="img" aria-label="6-second ECG rhythm strip"'
-       + (step()==="rate" && !S.rateLocked ? ' style="cursor:crosshair"' : '') + '>' + out + '</svg>';
+       + (sty.length ? ' style="'+sty.join(';')+'"' : '') + '>' + out + '</svg>';
 }
 function zoomSVG(mode){
   var s = S.strip;
@@ -336,29 +377,14 @@ function zoomSVG(mode){
   var w = span*pxSec, h = 210, baseY = 118;
   var out = gridSVG(w,h,sm);
   out += '<path d="'+tracePath(s.samples, s.dt, t0, t0+span, pxSec, baseY, 95)+'" fill="none" stroke="#22303E" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>';
-  var bracket = null;
-  if (mode==="pr" && s.prSec){
-    var boxes = Math.round(s.prSec/0.04);
-    bracket = {x0:(b-t0)*pxSec, x1:(b+s.prSec-t0)*pxSec, label:"PR: P starts \u2192 QRS starts ("+boxes+" small boxes)"};
-  } else if (mode==="qrs" && s.qrsSec){
-    var qs;
-    if (s.prSec != null){ qs = b + s.prSec; }
-    else {
-      var pk2 = null;
-      for (var i=0;i<s.peaks.length;i++){ if (s.peaks[i] >= b-0.01){ pk2 = s.peaks[i]; break; } }
-      if (pk2 === null) pk2 = s.peaks[0];
-      qs = pk2 - (s.qrsSec >= 0.12 ? 0.06 : 0.036);
-    }
-    var bx = s.qrsSec/0.04;
-    bracket = {x0:(qs-t0)*pxSec, x1:(qs+s.qrsSec-t0)*pxSec, label:"QRS width: "+(bx%1===0?bx:bx.toFixed(1))+" small boxes"};
-  }
-  if (bracket){
-    out += '<rect x="'+bracket.x0+'" y="0" width="'+(bracket.x1-bracket.x0)+'" height="'+h+'" fill="#2F7FD1" opacity="0.10"/>';
-    out += '<path d="M'+bracket.x0+' '+(h-26)+' v8 h'+(bracket.x1-bracket.x0)+' v-8" stroke="#215E9E" stroke-width="2" fill="none"/>';
-    out += '<text x="'+((bracket.x0+bracket.x1)/2)+'" y="'+(h-6)+'" text-anchor="middle" font-size="12" font-weight="700" fill="#215E9E">'+esc(bracket.label)+'</text>';
-  }
-  out += '<text x="8" y="16" font-size="11" fill="#5B7288">Zoomed \u00D73 \u00B7 1 small box = 0.04 s</text>';
-  return '<div class="zoomwrap"><svg viewBox="0 0 '+w+' '+h+'" style="width:100%;min-width:320px;display:block;background:#FFF9F6;border-radius:12px" role="img" aria-label="Zoomed view of one beat">'+out+'</svg></div>';
+  out += '<text x="8" y="16" font-size="11" fill="#5B7288">Zoomed \u00D73 \u00B7 measure with your calipers</text>';
+  S._zoomT0 = t0;
+  if (S.zcal.a === null){ S.zcal.a = t0 + 0.06; S.zcal.b = t0 + 0.16; }
+  S.zcal.a = Math.max(t0, Math.min(t0+span, S.zcal.a));
+  S.zcal.b = Math.max(t0, Math.min(t0+span, S.zcal.b));
+  out += caliperGroup('zc', (S.zcal.a-t0)*pxSec, (S.zcal.b-t0)*pxSec, h);
+  var readout = '<div class="calrow"><span class="calread" id="zc-read">'+calText(S.zcal.a, S.zcal.b)+'</span><span style="font-size:12px;color:var(--slate);font-weight:700">drag the caliper legs to measure</span></div>';
+  return '<div class="zoomwrap"><svg id="zoom-svg" viewBox="0 0 '+w+' '+h+'" style="width:100%;min-width:320px;display:block;background:#FFF9F6;border-radius:12px;touch-action:none" role="img" aria-label="Zoomed view of one beat">'+out+'</svg></div>' + readout;
 }
 function pupSVG(size, mood){
   var mouth = mood==="sad" ? '<path d="M42 62 Q50 56 58 62" stroke="#17324A" stroke-width="3" fill="none" stroke-linecap="round"/>'
@@ -385,8 +411,8 @@ function blueyLine(){
   if (st==="rate") return 'Fresh strip from telemetry! First, <b>rate</b>. This strip is exactly 6 seconds. Tap every tall spike (R wave) you can find, then we multiply by 10.';
   if (st==="reg") return 'Step 2: <b>regularity</b>. Are the R waves evenly spaced, like a steady drumbeat? Try my caliper button if you want help marching them out.';
   if (st==="p") return 'Step 3: <b>P waves</b>. Before each big spike, is there a small round bump? That bump means the atria fired first, like they should.';
-  if (st==="pr") return 'Step 4: the <b>PR interval</b>: from the start of the P to the start of the QRS. I zoomed in on one beat. Count the small boxes! Normal is 3 to 5.';
-  if (st==="qrs") return 'Last measurement: <b>QRS width</b>. Count small boxes across the big spike. Under 3 is narrow and normal. 3 or more is wide, which means trouble below the AV node.';
+  if (st==="pr") return 'Step 4: the <b>PR interval</b>: from the start of the P to the start of the QRS. I zoomed in on one beat. Measure it with your calipers! Normal is 0.12 to 0.20 seconds.';
+  if (st==="qrs") return 'Last measurement: <b>QRS width</b>. Measure across the big spike with your calipers. Under 0.12 seconds is narrow and normal. 0.12 or more is wide, which means trouble below the AV node.';
   return 'Put it all together, nurse! Based on your five findings, what rhythm is this?';
 }
 function choiceBtn(action, dataAttrs, label, sub){
@@ -399,7 +425,7 @@ function render(){
       + '<h1>Code <span class="accent">Bluey</span></h1>'
       + '<p class="sub">Cardiac rhythm rounds with your favorite tele-unit pup</p>'
       + '<div class="card"><div style="font-family:var(--disp);font-weight:700;font-size:17px;margin-bottom:10px">Every strip, same 5 steps:</div>';
-    var steps = [["Rate","count R waves in 6 seconds, then \u00D7 10"],["Regularity","are the R-to-R distances even?"],["P waves","one bump before every QRS?"],["PR interval","3\u20135 small boxes is normal"],["QRS width","under 3 small boxes is narrow"]];
+    var steps = [["Rate","count R waves in 6 seconds, then \u00D7 10"],["Regularity","are the R-to-R distances even?"],["P waves","one bump before every QRS?"],["PR interval","0.12\u20130.20 seconds is normal"],["QRS width","under 0.12 seconds is narrow"]];
     for (var i=0;i<steps.length;i++){
       html += '<div class="steplist"><span class="num">'+(i+1)+'</span><span style="font-size:15px"><b>'+steps[i][0]+'</b> \u2014 '+steps[i][1]+'</span></div>';
     }
@@ -433,6 +459,8 @@ function render(){
   var mood2 = S.feedback ? (S.feedback.ok ? "happy" : "sad") : "happy";
   html += '<div class="speech"><div style="flex-shrink:0">'+pupSVG(64,mood2)+'</div><div class="bubble">'+blueyLine()+'</div></div>';
   html += '<div class="panel">' + stripSVG();
+  html += '<div class="calrow"><button class="ghost" data-action="toggle-tool-cal">'+(S.cal.on ? 'Hide calipers' : '\uD83D\uDCCF Calipers')+'</button>'
+        + (S.cal.on ? '<span class="calread" id="sc-read">'+calText(S.cal.a, S.cal.b)+'</span>' : '') + '</div>';
   if ((step()==="pr" || step()==="qrs") && S.strip.peaks.length) html += zoomSVG(step());
   html += '<div style="margin-top:12px">';
   if (!S.feedback){
@@ -443,20 +471,26 @@ function render(){
         + '<div class="rate-row"><button class="btn" data-action="lock-rate" '+(S.marks.length? '':'disabled')+'>Lock in '+(S.marks.length? S.marks.length*10+' bpm':'rate')+'</button>'
         + '<button class="ghost" data-action="flatline">I see no R waves (flatline)</button></div>';
     } else if (st === "reg"){
-      html += '<button class="ghost" data-action="toggle-cal" style="margin-bottom:10px">'+(S.showCal?'Hide calipers':'\uD83D\uDCCF Show calipers (march it out)')+'</button>'
+      html += '<button class="ghost" data-action="toggle-cal" style="margin-bottom:10px">'+(S.showCal?'Hide auto-march':'Auto-march R waves')+'</button>'
         + choiceBtn("answer",'data-step="reg" data-choice="regular"',"Regular","R-to-R spacing stays the same")
         + choiceBtn("answer",'data-step="reg" data-choice="irregular"',"Irregular","R-to-R spacing keeps changing");
     } else if (st === "p"){
       html += choiceBtn("answer",'data-step="p" data-choice="yes"',"Yes \u2014 one P before every QRS","")
         + choiceBtn("answer",'data-step="p" data-choice="no"',"No \u2014 absent, or just a wavy baseline","");
     } else if (st === "pr"){
-      html += choiceBtn("answer",'data-step="pr" data-choice="normal"',"Normal: 3\u20135 small boxes","0.12\u20130.20 seconds")
-        + choiceBtn("answer",'data-step="pr" data-choice="long"',"Prolonged: more than 5 small boxes","over 0.20 seconds")
+      html += choiceBtn("answer",'data-step="pr" data-choice="normal"',"Normal: 0.12\u20130.20 seconds","")
+        + choiceBtn("answer",'data-step="pr" data-choice="long"',"Prolonged: over 0.20 seconds","")
         + choiceBtn("answer",'data-step="pr" data-choice="na"',"Can't measure it","no P waves = no PR interval");
     } else if (st === "qrs"){
-      html += choiceBtn("answer",'data-step="qrs" data-choice="narrow"',"Narrow: under 3 small boxes","under 0.12 s \u2014 normal conduction")
-        + choiceBtn("answer",'data-step="qrs" data-choice="wide"',"Wide: 3 small boxes or more","0.12 s or more \u2014 ventricular origin");
+      html += choiceBtn("answer",'data-step="qrs" data-choice="narrow"',"Narrow: under 0.12 seconds","normal conduction")
+        + choiceBtn("answer",'data-step="qrs" data-choice="wide"',"Wide: 0.12 seconds or more","ventricular origin");
     } else {
+      var fd = findingsData();
+      html += '<div class="findings"><div class="ftitle">Findings from your analysis</div>';
+      for (var f=0;f<fd.length;f++){
+        html += '<div class="frow"><span>'+fd[f][0]+'</span><b>'+fd[f][1]+'</b></div>';
+      }
+      html += '</div>';
       for (var r=0;r<RHYTHM_KEYS.length;r++){
         html += choiceBtn("answer-id",'data-key="'+RHYTHM_KEYS[r]+'"',RHYTHMS[RHYTHM_KEYS[r]].name,"");
       }
@@ -475,11 +509,80 @@ function render(){
   var svg = document.getElementById("strip-svg");
   if (svg && step()==="rate" && !S.rateLocked){
     svg.addEventListener("click", function(e){
+      if (e.target.getAttribute && e.target.getAttribute("data-leg")) return;
       var rect = svg.getBoundingClientRect();
       var xView = ((e.clientX - rect.left)/rect.width)*STRIP_W;
       handleTap(xView/PX_PER_SEC);
     });
   }
+  if (S.screen === "play"){
+    if (S.cal.on){
+      bindCaliper({svgId:"strip-svg", prefix:"sc", readId:"sc-read", state:S.cal,
+                   t0:0, span:STRIP_SEC, viewW:STRIP_W, pxPerSec:PX_PER_SEC, snap:S.strip.peaks});
+    }
+    if (document.getElementById("zoom-svg")){
+      bindCaliper({svgId:"zoom-svg", prefix:"zc", readId:"zc-read", state:S.zcal,
+                   t0:S._zoomT0, span:0.6, viewW:0.6*PX_PER_SEC*3, pxPerSec:PX_PER_SEC*3, snap:null});
+    }
+  }
+}
+
+/* ---------- draggable calipers ---------- */
+function bindCaliper(cfg){
+  var svg = document.getElementById(cfg.svgId);
+  if (!svg) return;
+  var read = document.getElementById(cfg.readId);
+  function xToSec(clientX){
+    var r = svg.getBoundingClientRect();
+    return cfg.t0 + (((clientX - r.left)/r.width)*cfg.viewW)/cfg.pxPerSec;
+  }
+  function clampT(t){ return Math.min(cfg.t0+cfg.span, Math.max(cfg.t0, t)); }
+  function setAttr(id, attrs){
+    var el = document.getElementById(cfg.prefix+id);
+    if (!el) return;
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+  }
+  function apply(){
+    var st = cfg.state;
+    var ax = (st.a-cfg.t0)*cfg.pxPerSec, bx = (st.b-cfg.t0)*cfg.pxPerSec;
+    setAttr("-la",{x1:ax,x2:ax}); setAttr("-ha",{cx:ax}); setAttr("-ga",{cx:ax});
+    setAttr("-lb",{x1:bx,x2:bx}); setAttr("-hb",{cx:bx}); setAttr("-gb",{cx:bx});
+    setAttr("-bar",{x1:ax,x2:bx});
+    setAttr("-barhit",{x:Math.min(ax,bx), width:Math.max(Math.abs(bx-ax),1)});
+    if (read) read.textContent = calText(st.a, st.b);
+  }
+  var drag = null;
+  svg.addEventListener("pointerdown", function(e){
+    var leg = e.target.getAttribute ? e.target.getAttribute("data-leg") : null;
+    if (!leg) return;
+    e.preventDefault();
+    try { svg.setPointerCapture(e.pointerId); } catch(err){}
+    drag = {leg:leg, start:xToSec(e.clientX), a0:cfg.state.a, b0:cfg.state.b};
+  });
+  svg.addEventListener("pointermove", function(e){
+    if (!drag) return;
+    e.preventDefault();
+    var st = cfg.state, t = xToSec(e.clientX);
+    if (drag.leg === "bar"){
+      var w = drag.b0 - drag.a0, na = drag.a0 + (t - drag.start);
+      var lo = Math.min(na, na+w), hi = Math.max(na, na+w);
+      if (lo < cfg.t0) na += cfg.t0 - lo;
+      if (hi > cfg.t0+cfg.span) na -= hi - (cfg.t0+cfg.span);
+      st.a = na; st.b = na + w;
+    } else {
+      var v = clampT(t);
+      if (cfg.snap){
+        for (var i=0;i<cfg.snap.length;i++){
+          if (Math.abs(cfg.snap[i]-v) < 0.06){ v = cfg.snap[i]; break; }
+        }
+      }
+      if (drag.leg === "a") st.a = v; else st.b = v;
+    }
+    apply();
+  });
+  function endDrag(){ drag = null; }
+  svg.addEventListener("pointerup", endDrag);
+  svg.addEventListener("pointercancel", endDrag);
 }
 
 /* ---------- event delegation ---------- */
@@ -491,6 +594,7 @@ document.addEventListener("click", function(e){
   else if (a==="lock-rate") lockRate(false);
   else if (a==="flatline") lockRate(true);
   else if (a==="toggle-cal"){ S.showCal = !S.showCal; render(); }
+  else if (a==="toggle-tool-cal"){ S.cal.on = !S.cal.on; render(); }
   else if (a==="answer") answer(el.getAttribute("data-step"), el.getAttribute("data-choice"));
   else if (a==="answer-id") answerId(el.getAttribute("data-key"));
   else if (a==="advance") advance();
